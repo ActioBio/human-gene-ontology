@@ -62,30 +62,38 @@ def go_graph_to_dataframe(graph):
     go_df = pd.DataFrame(rows, columns=['go_id', 'go_name', 'go_domain'])
     return go_df.sort_values('go_id')
 
+def setup_annotation_keys(graph):
+    keys = ('direct_annotations', 'direct_not_annotations', 'inferred_annotations')
+    for node in graph:
+        graph.nodes[node].update({key: set() for key in keys})
+
+def process_annotations(graph, goa_df):
+    direct_annotations = goa_df.loc[~goa_df['Qualifier'].str.contains('NOT'), ['GO_ID', 'GeneID']]
+    direct_not_annotations = goa_df.loc[goa_df['Qualifier'].str.contains('NOT'), ['GO_ID', 'GeneID']]
+    
+    for go_id, gene in direct_annotations.itertuples(index=False):
+        if go_id in graph:
+            graph.nodes[go_id]['direct_annotations'].add(gene)
+
+    for go_id, gene in direct_not_annotations.itertuples(index=False):
+        if go_id in graph:
+            graph.nodes[go_id]['direct_not_annotations'].add(gene)
+
+def propagate_direct_annotations(graph):
+    for node in nx.topological_sort(graph):
+        data = graph.nodes[node]
+        data['inferred_annotations'].difference_update(data['direct_not_annotations'])
+        data['inferred_annotations'].update(data['direct_annotations'])
+
+        # Propagate to successor nodes
+        for successor_node in graph.successors(node):
+            graph.nodes[successor_node]['inferred_annotations'].update(data['inferred_annotations'])
+
 def annotate_and_propagate(graph, goa_df):
     graph = graph.copy()
-    
-    annotation_keys = ('direct_annotations', 'direct_not_annotations', 'inferred_annotations')
-    for node in graph:
-        graph.nodes[node].update({key: set() for key in annotation_keys})
-
-    # Process direct annotations
-    for _, row in goa_df.iterrows():
-        go_id, gene = row['GO_ID'], row['GeneID']
-        if go_id in graph:
-            key = 'direct_not_annotations' if is_not_qualifier(row.Qualifier) else 'direct_annotations'
-            graph.nodes[go_id][key].add(gene)
-
-    # Propagate annotations using topological sort for efficiency
-    for node in nx.topological_sort(graph):
-        node_data = graph.nodes[node]
-        inferred = node_data['inferred_annotations']
-        inferred.update(node_data['direct_annotations'] - node_data['direct_not_annotations'])
-        
-        # Transfer the inferred annotations to parent nodes
-        for parent_node in graph.successors(node):
-            graph.nodes[parent_node]['inferred_annotations'].update(inferred)
-
+    setup_annotation_keys(graph)
+    process_annotations(graph, goa_df)
+    propagate_direct_annotations(graph)
     return graph
 
 def extract_annotation_df(graph_annot, gene_df, go_df):
@@ -95,21 +103,21 @@ def extract_annotation_df(graph_annot, gene_df, go_df):
             for gene in data[f'{type}_annotations']:
                 rows.append((node, type, gene))
 
-    annotation_df = pd.DataFrame(rows, columns=['go_id', 'annotation_type', 'GeneID'])
+    annotation_df = pd.DataFrame(rows, columns=['go_id', 'type', 'GeneID'])
     annotation_df = annotation_df.merge(gene_df)
 
     rows = []
-    for annotation_type, taxon_df in annotation_df.groupby(['annotation_type']):
+    for (tax_id, type), taxon_df in annotation_df.groupby(['tax_id', 'type']):
         for go_id, term_df in taxon_df.groupby('go_id'):
             term_df = term_df.sort_values('GeneID')
-            row = HUMAN_TAX_ID, go_id, annotation_type, len(term_df), join_list_with_pipe(term_df['GeneID']), join_list_with_pipe(term_df['Symbol'])
+            row = tax_id, go_id, type, len(term_df), join_list_with_pipe(term_df['GeneID']), join_list_with_pipe(term_df['Symbol'])
             rows.append(row)
 
     wide_df = pd.DataFrame(rows, columns=['tax_id', 'go_id', 'annotation_type', 'size', 'gene_ids', 'gene_symbols'])
     return go_df.merge(wide_df)
 
-def get_annotation_path(annotation_type, ev_type):
-    path = os.path.join(OUTPUT_DIR, f'GO_annotations-{HUMAN_TAX_ID}-{annotation_type}-{ev_type}.tsv')
+def get_annotation_path(tax_id, annotation_type, ev_type):
+    path = os.path.join(OUTPUT_DIR, f'GO_annotations-{tax_id}-{annotation_type}-{ev_type}.tsv')
     return path
 
 def main():
@@ -123,8 +131,8 @@ def main():
         graph_annot = annotate_and_propagate(go_graph, goa_subset_df)
         annotation_df = extract_annotation_df(graph_annot, gene_df, go_df)
 
-        for annotation_type, df in annotation_df.groupby(['annotation_type']):
-            path = get_annotation_path(annotation_type, ev_type)
+        for (tax_id, annotation_type), df in annotation_df.groupby(['tax_id', 'annotation_type']):
+            path = get_annotation_path(tax_id, annotation_type, ev_type)
             df.to_csv(path, sep='\t', index=False)
 
 if __name__ == "__main__":
