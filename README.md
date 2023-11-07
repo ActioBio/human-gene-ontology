@@ -1,17 +1,27 @@
-# User-friendly Gene Ontology annotations
+# Human Gene Ontology annotations
 
-[![DOI](https://zenodo.org/badge/doi/10.5281/zenodo.21711.svg)](https://doi.org/10.5281/zenodo.21711)
+The parent project provides easy-to-use [Gene Ontology](http://geneontology.org/) annotations.
 
-This project provides easy-to-use [Gene Ontology](http://geneontology.org/) annotations. Annotations relate GO Terms with [Entrez Genes](https://doi.org/10.1093/nar/gki031). We provide genes as Entrez GeneIDs and as symbols.
+This repository hosts a modified version of the gene ontology annotation script, which has been adapted to focus exclusively on human gene annotations by filtering for tax_id 9606—Homo sapiens.
 
-Users choose from the following options:
+### Execution
 
-+ species: which species to retrieve annotations for
-+ evidence: whether to use all annotations or annotations from experimental evidence only
-+ propagation: whether to include only direct annotations or infer annotations based on ontology structure
+```
+conda env create -f environment.yml 
 
-The project includes a [website](https://git.dhimmel.com/gene-ontology/) for browsing and downloading annotation files.
+conda activate gene-ontology
 
-## Execution
+bash download.sh
 
-`sh code/run.sh > log.txt` downloads the latest input resources and rebuilds the annotation data.
+python process.py
+```
+
+### Output
+- GO_annotations-9606-inferred-allev.tsv
+  - inferred + direct annotations with all evidence
+- GO_annotations-9606-direct-allev.tsv
+  - direct annotations with all evidence
+- GO_annotations-9606-inferred-expev.tsv
+  - inferred + direct annotations with experimental evidence
+- GO_annotations-9606-direct-expev.tsv
+  - direct annotations with experimental evidence

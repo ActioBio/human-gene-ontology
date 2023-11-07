@@ -118,3 +118,6 @@ target/
 vignettes/*.html
 vignettes/*.pdf
 
+data/input/go-basic.obo
+data/input/gene_info.gz
+data/input/gene2go.gz
