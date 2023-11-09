@@ -1,4 +1,4 @@
-name: gene-ontology
+name: human-gene-ontology
 channels:
   - conda-forge
   - defaults

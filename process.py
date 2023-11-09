@@ -3,7 +3,6 @@ import pandas as pd
 import networkx as nx
 import obonet
 
-# Constants
 OUTPUT_DIR = "data/output"
 HUMAN_TAX_ID = 9606
 
@@ -19,7 +18,6 @@ COLUMNS = {
 DTYPE = {
     'tax_id': 'Int64', 'GeneID': 'Int64', 'Symbol': str, 'type_of_gene': str, 'Qualifier': str
 }
-
 REMOVE_SUBSETS = {'goantislim_grouping', 'gocheck_do_not_annotate', 'gocheck_do_not_manually_annotate'}
 EXPERIMENTAL_CODES = {'EXP', 'IDA', 'IPI', 'IMP', 'IGI', 'IEP'}
 PROPAGATE_ALONG = {'is_a', 'part_of'}
@@ -30,13 +28,13 @@ def join_list_with_pipe(lst):
 def load_filtered_dataframe(file_key):
     path = FILE_PATHS[file_key]
     return pd.read_csv(
-        path, 
-        sep='\t', 
+        path,
+        sep='\t',
         compression='gzip',
-        comment='#', 
-        names=COLUMNS[file_key], 
+        comment='#',
+        names=COLUMNS[file_key],
         usecols=COLUMNS[file_key],
-        na_values=['-'], 
+        na_values=['-'],
         dtype=DTYPE
     ).query('tax_id == @HUMAN_TAX_ID')
 
@@ -70,7 +68,7 @@ def setup_annotation_keys(graph):
 def process_annotations(graph, goa_df):
     direct_annotations = goa_df.loc[~goa_df['Qualifier'].str.contains('NOT'), ['GO_ID', 'GeneID']]
     direct_not_annotations = goa_df.loc[goa_df['Qualifier'].str.contains('NOT'), ['GO_ID', 'GeneID']]
-    
+
     for go_id, gene in direct_annotations.itertuples(index=False):
         if go_id in graph:
             graph.nodes[go_id]['direct_annotations'].add(gene)
@@ -84,7 +82,6 @@ def propagate_direct_annotations(graph):
         data = graph.nodes[node]
         data['inferred_annotations'].difference_update(data['direct_not_annotations'])
         data['inferred_annotations'].update(data['direct_annotations'])
-
         # Propagate to successor nodes
         for successor_node in graph.successors(node):
             graph.nodes[successor_node]['inferred_annotations'].update(data['inferred_annotations'])
@@ -96,29 +93,38 @@ def annotate_and_propagate(graph, goa_df):
     propagate_direct_annotations(graph)
     return graph
 
+def create_annotations_df(graph_annot, annotation_key, exclude_keys=None):
+    exclude_keys = exclude_keys or []
+    annotations = [
+        (node, gene) for node, genes in graph_annot.nodes(data=annotation_key)
+        for gene in genes if not any(gene in graph_annot.nodes[node][key] for key in exclude_keys)
+    ]
+    return pd.DataFrame(annotations, columns=['go_id', 'GeneID'])
+
+def merge_gene_info(annotations_df, gene_df):
+    return annotations_df.merge(gene_df, on='GeneID')
+
+def aggregate_gene_ids_and_symbols(annotations_df):
+    return annotations_df.groupby('go_id').agg({
+        'GeneID': lambda x: join_list_with_pipe(sorted(set(x))),
+        'Symbol': lambda x: join_list_with_pipe(sorted(set(x)))
+    }).reset_index()
+
 def extract_annotation_df(graph_annot, gene_df, go_df):
-    rows = []
-    for node, data in graph_annot.nodes.items():
-        for type in ('direct', 'inferred'):
-            for gene in data[f'{type}_annotations']:
-                rows.append((node, type, gene))
+    direct_df = create_annotations_df(graph_annot, 'direct_annotations')
+    inferred_df = create_annotations_df(graph_annot, 'inferred_annotations', ['direct_annotations'])
 
-    annotation_df = pd.DataFrame(rows, columns=['go_id', 'type', 'GeneID'])
-    annotation_df = annotation_df.merge(gene_df)
+    direct_df = merge_gene_info(direct_df, gene_df)
+    inferred_df = merge_gene_info(inferred_df, gene_df)
 
-    rows = []
-    for (tax_id, type), taxon_df in annotation_df.groupby(['tax_id', 'type']):
-        for go_id, term_df in taxon_df.groupby('go_id'):
-            term_df = term_df.sort_values('GeneID')
-            row = tax_id, go_id, type, len(term_df), join_list_with_pipe(term_df['GeneID']), join_list_with_pipe(term_df['Symbol'])
-            rows.append(row)
+    direct_agg = aggregate_gene_ids_and_symbols(direct_df)
+    inferred_agg = aggregate_gene_ids_and_symbols(inferred_df)
 
-    wide_df = pd.DataFrame(rows, columns=['tax_id', 'go_id', 'annotation_type', 'size', 'gene_ids', 'gene_symbols'])
-    return go_df.merge(wide_df)
+    final_df = direct_agg.merge(inferred_agg, on='go_id', how='outer', suffixes=('_direct', '_inferred'))
+    final_df = go_df.merge(final_df, on='go_id', how='right')
+    final_df = final_df[['go_id', 'go_name', 'go_domain', 'GeneID_direct', 'GeneID_inferred', 'Symbol_direct', 'Symbol_inferred']]
 
-def get_annotation_path(tax_id, annotation_type, ev_type):
-    path = os.path.join(OUTPUT_DIR, f'GO_annotations-{tax_id}-{annotation_type}-{ev_type}.tsv')
-    return path
+    return final_df
 
 def main():
     gene_df = load_filtered_dataframe("GENE_INFO")
@@ -130,10 +136,9 @@ def main():
         goa_subset_df = gene2go_df[gene2go_df['Evidence'].isin(EXPERIMENTAL_CODES)] if ev_type == 'expev' else gene2go_df
         graph_annot = annotate_and_propagate(go_graph, goa_subset_df)
         annotation_df = extract_annotation_df(graph_annot, gene_df, go_df)
-
-        for (tax_id, annotation_type), df in annotation_df.groupby(['tax_id', 'annotation_type']):
-            path = get_annotation_path(tax_id, annotation_type, ev_type)
-            df.to_csv(path, sep='\t', index=False)
+        file_name = f'GO_annotations-{HUMAN_TAX_ID}-{ev_type}.tsv.gz'
+        path = os.path.join(OUTPUT_DIR, file_name)
+        annotation_df.to_csv(path, sep='\t', index=False, compression='gzip')
 
 if __name__ == "__main__":
     main()
