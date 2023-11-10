@@ -32,18 +32,24 @@ GO_DOMAINS = {'biological_process', 'molecular_function', 'cellular_component'}
 def join_list_with_pipe(lst):
     return '|'.join(map(str, lst))
 
-def load_filtered_dataframe(file_key):
+def load_filtered_dataframe_iteratively(file_key):
     path = INPUT_FILE[file_key]
-    return pd.read_csv(
-        path,
-        sep='\t',
-        compression='gzip',
-        comment='#',
-        names=INPUT_COLUMN[file_key],
-        usecols=INPUT_COLUMN[file_key],
-        na_values=['-'],
-        dtype=INPUT_DTYPE
-    ).query('tax_id == @HUMAN_TAX_ID')
+    selected_data = []
+
+    with gzip.open(path, 'rt') as f:
+        header_line = ''
+        while not header_line.startswith('#'):
+            header_line = f.readline().strip()
+        adjusted_header = header_line.replace('#', '').split('\t')
+        col_indices = [adjusted_header.index(col) for col in INPUT_COLUMN[file_key]]
+        tax_id_index = adjusted_header.index('tax_id') 
+
+        for line in f:
+            split_line = line.strip().split('\t')
+            if split_line[tax_id_index] == str(HUMAN_TAX_ID):
+                selected_data.append([split_line[i] for i in col_indices])
+
+    return pd.DataFrame(selected_data, columns=INPUT_COLUMN[file_key])
 
 def read_go_to_graph():
     with open(INPUT_FILE["GO_OBO"]) as read_file:
@@ -171,8 +177,8 @@ def extract_gene_ids(gene_ids_str):
     return [int(gene_id) for gene_id in gene_ids_str.split('|')] if not pd.isna(gene_ids_str) and gene_ids_str else []
 
 def main():
-    gene_df = load_filtered_dataframe("GENE_INFO")
-    gene2go_df = load_filtered_dataframe("GENE2GO")
+    gene_df = load_filtered_dataframe_iteratively("GENE_INFO")
+    gene2go_df = load_filtered_dataframe_iteratively("GENE2GO")
     go_graph = read_go_to_graph()
     go_df = go_graph_to_dataframe(go_graph)
     graph_annot = annotate_and_propagate(go_graph, gene2go_df)
