@@ -2,47 +2,51 @@ import os
 import pandas as pd
 import networkx as nx
 import obonet
+import csv
+import gzip
 
-OUTPUT_DIR = "data/output"
 HUMAN_TAX_ID = 9606
 
-FILE_PATHS = {
+INPUT_FILE = {
     "GENE2GO": "data/input/gene2go.gz",
     "GENE_INFO": "data/input/gene_info.gz",
     "GO_OBO": "data/input/go-basic.obo"
 }
-COLUMNS = {
-    "GENE_INFO": ['tax_id', 'GeneID', 'Symbol', 'type_of_gene'],
+
+INPUT_COLUMN = {
+    "GENE_INFO": ['tax_id', 'GeneID', 'Symbol'],
     "GENE2GO": ['tax_id', 'GeneID', 'GO_ID', 'Evidence', 'Qualifier']
 }
-DTYPE = {
-    'tax_id': 'Int64', 'GeneID': 'Int64', 'Symbol': str, 'type_of_gene': str, 'Qualifier': str
+
+INPUT_DTYPE = {
+    'tax_id': 'Int64', 'GeneID': 'Int64', 'Symbol': str, 'Qualifier': str
 }
+
+OUTPUT_DIR = "data/output"
+
 REMOVE_SUBSETS = {'goantislim_grouping', 'gocheck_do_not_annotate', 'gocheck_do_not_manually_annotate'}
 EXPERIMENTAL_CODES = {'EXP', 'IDA', 'IPI', 'IMP', 'IGI', 'IEP'}
 PROPAGATE_ALONG = {'is_a', 'part_of'}
+GO_DOMAINS = {'biological_process', 'molecular_function', 'cellular_component'}
 
 def join_list_with_pipe(lst):
     return '|'.join(map(str, lst))
 
 def load_filtered_dataframe(file_key):
-    path = FILE_PATHS[file_key]
+    path = INPUT_FILE[file_key]
     return pd.read_csv(
         path,
         sep='\t',
         compression='gzip',
         comment='#',
-        names=COLUMNS[file_key],
-        usecols=COLUMNS[file_key],
+        names=INPUT_COLUMN[file_key],
+        usecols=INPUT_COLUMN[file_key],
         na_values=['-'],
-        dtype=DTYPE
+        dtype=INPUT_DTYPE
     ).query('tax_id == @HUMAN_TAX_ID')
 
-def is_not_qualifier(qualifier):
-    return not pd.isnull(qualifier) and qualifier.upper().startswith('NOT')
-
 def read_go_to_graph():
-    with open(FILE_PATHS["GO_OBO"]) as read_file:
+    with open(INPUT_FILE["GO_OBO"]) as read_file:
         graph = obonet.read_obo(read_file)
         graph.remove_nodes_from({
             node for node, data in graph.nodes(data=True)
@@ -66,8 +70,10 @@ def setup_annotation_keys(graph):
         graph.nodes[node].update({key: set() for key in keys})
 
 def process_annotations(graph, goa_df):
-    direct_annotations = goa_df.loc[~goa_df['Qualifier'].str.contains('NOT'), ['GO_ID', 'GeneID']]
-    direct_not_annotations = goa_df.loc[goa_df['Qualifier'].str.contains('NOT'), ['GO_ID', 'GeneID']]
+    not_qualifier = goa_df['Qualifier'].apply(lambda qualifier: qualifier.startswith('NOT'))
+    # Filtering direct annotations (where Qualifier is not 'NOT')
+    direct_annotations = goa_df.loc[~not_qualifier, ['GO_ID', 'GeneID']]
+    direct_not_annotations = goa_df.loc[not_qualifier, ['GO_ID', 'GeneID']]
 
     for go_id, gene in direct_annotations.itertuples(index=False):
         if go_id in graph:
@@ -126,6 +132,44 @@ def extract_annotation_df(graph_annot, gene_df, go_df):
 
     return final_df
 
+def create_node_csv_files(annotation_df):
+    for domain in GO_DOMAINS:
+        domain_df = annotation_df[annotation_df['go_domain'] == domain][['go_id', 'go_name']]
+        node_file_name = f'node_{domain}.csv.gz'
+        path = os.path.join(OUTPUT_DIR, 'csv', node_file_name)
+        domain_df.to_csv(path, index=False, compression='gzip') 
+
+def create_edge_csv_files(annotation_df, gene2go_df):
+    gene2go_evidence_df = gene2go_df[gene2go_df['Evidence'].isin(EXPERIMENTAL_CODES)]
+    gene_go_identifier_set = set(gene2go_evidence_df.apply(lambda row: f"{row['GeneID']}_{row['GO_ID']}", axis=1))
+
+    files = {domain: gzip.open(os.path.join(OUTPUT_DIR, 'csv', f'edge_gene_to_{domain}.csv.gz'), 'wt', newline='') for domain in GO_DOMAINS} 
+    writers = {domain: csv.writer(file) for domain, file in files.items()}
+
+    for writer in writers.values():
+        writer.writerow(['gene_id', 'go_id', 'type', 'experimental'])
+
+    for _, row in annotation_df.iterrows():
+        go_id = row['go_id']
+        direct_gene_ids = extract_gene_ids(row['GeneID_direct'])
+        inferred_gene_ids = extract_gene_ids(row['GeneID_inferred'])
+        domain = row['go_domain']
+
+        if direct_gene_ids:
+            is_experimental = [str(gene_id) + '_' + go_id in gene_go_identifier_set for gene_id in direct_gene_ids]
+            for i, gene_id in enumerate(direct_gene_ids):
+                writers[domain].writerow([gene_id, go_id, 'direct', is_experimental[i]])
+
+        if inferred_gene_ids:
+            for gene_id in inferred_gene_ids:
+                writers[domain].writerow([gene_id, go_id, 'inferred', False])
+
+    for file in files.values():
+        file.close()
+
+def extract_gene_ids(gene_ids_str):
+    return [int(gene_id) for gene_id in gene_ids_str.split('|')] if not pd.isna(gene_ids_str) and gene_ids_str else []
+
 def main():
     gene_df = load_filtered_dataframe("GENE_INFO")
     gene2go_df = load_filtered_dataframe("GENE2GO")
@@ -136,8 +180,13 @@ def main():
         goa_subset_df = gene2go_df[gene2go_df['Evidence'].isin(EXPERIMENTAL_CODES)] if ev_type == 'expev' else gene2go_df
         graph_annot = annotate_and_propagate(go_graph, goa_subset_df)
         annotation_df = extract_annotation_df(graph_annot, gene_df, go_df)
+
+        if ev_type == 'allev':
+            create_node_csv_files(annotation_df)
+            create_edge_csv_files(annotation_df, gene2go_df)
+
         file_name = f'GO_annotations-{HUMAN_TAX_ID}-{ev_type}.tsv.gz'
-        path = os.path.join(OUTPUT_DIR, file_name)
+        path = os.path.join(OUTPUT_DIR, 'tsv', file_name)
         annotation_df.to_csv(path, sep='\t', index=False, compression='gzip')
 
 if __name__ == "__main__":

@@ -26,7 +26,19 @@ python process.py
   - The file from NCBI is a compressed archive containing detailed information on genes.
 
 ### Output
+
+#### TSV 
+
 - GO_annotations-9606-allev.tsv
   - Contains both inferred and direct annotations with all types of evidence.
 - GO_annotations-9606-expev.tsv
   - Contains both inferred and direct annotations with experimental evidence specifically.
+
+#### CSV
+
+- node_{domain}.csv.gz
+  - Lists GO terms and names for specific domains (biological process, cellular component and molecular function).
+- edge_gene_to_{domain}.csv.gz
+  - Shows gene-GO term relationships for each domain, indicating if annotations are direct or inferred and if the evidence is experimental.
+
+Note: These CSV files are formatted for easy import into Neo4j.
