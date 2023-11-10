@@ -136,14 +136,14 @@ def create_node_csv_files(annotation_df):
     for domain in GO_DOMAINS:
         domain_df = annotation_df[annotation_df['go_domain'] == domain][['go_id', 'go_name']]
         node_file_name = f'node_{domain}.csv.gz'
-        path = os.path.join(OUTPUT_DIR, 'csv', node_file_name)
+        path = os.path.join(OUTPUT_DIR, node_file_name)
         domain_df.to_csv(path, index=False, compression='gzip') 
 
 def create_edge_csv_files(annotation_df, gene2go_df):
     gene2go_evidence_df = gene2go_df[gene2go_df['Evidence'].isin(EXPERIMENTAL_CODES)]
     gene_go_identifier_set = set(gene2go_evidence_df.apply(lambda row: f"{row['GeneID']}_{row['GO_ID']}", axis=1))
 
-    files = {domain: gzip.open(os.path.join(OUTPUT_DIR, 'csv', f'edge_gene_to_{domain}.csv.gz'), 'wt', newline='') for domain in GO_DOMAINS} 
+    files = {domain: gzip.open(os.path.join(OUTPUT_DIR, f'edge_gene_to_{domain}.csv.gz'), 'wt', newline='') for domain in GO_DOMAINS} 
     writers = {domain: csv.writer(file) for domain, file in files.items()}
 
     for writer in writers.values():
@@ -175,19 +175,10 @@ def main():
     gene2go_df = load_filtered_dataframe("GENE2GO")
     go_graph = read_go_to_graph()
     go_df = go_graph_to_dataframe(go_graph)
-
-    for ev_type in ('allev', 'expev'):
-        goa_subset_df = gene2go_df[gene2go_df['Evidence'].isin(EXPERIMENTAL_CODES)] if ev_type == 'expev' else gene2go_df
-        graph_annot = annotate_and_propagate(go_graph, goa_subset_df)
-        annotation_df = extract_annotation_df(graph_annot, gene_df, go_df)
-
-        if ev_type == 'allev':
-            create_node_csv_files(annotation_df)
-            create_edge_csv_files(annotation_df, gene2go_df)
-
-        file_name = f'GO_annotations-{HUMAN_TAX_ID}-{ev_type}.tsv.gz'
-        path = os.path.join(OUTPUT_DIR, 'tsv', file_name)
-        annotation_df.to_csv(path, sep='\t', index=False, compression='gzip')
+    graph_annot = annotate_and_propagate(go_graph, gene2go_df)
+    annotation_df = extract_annotation_df(graph_annot, gene_df, go_df)
+    create_node_csv_files(annotation_df)
+    create_edge_csv_files(annotation_df, gene2go_df)
 
 if __name__ == "__main__":
     main()

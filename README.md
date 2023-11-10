@@ -27,15 +27,6 @@ python process.py
 
 ### Output
 
-#### TSV 
-
-- GO_annotations-9606-allev.tsv
-  - Contains both inferred and direct annotations with all types of evidence.
-- GO_annotations-9606-expev.tsv
-  - Contains both inferred and direct annotations with experimental evidence specifically.
-
-#### CSV
-
 - node_{domain}.csv.gz
   - Lists GO terms and names for specific domains (biological process, cellular component and molecular function).
 - edge_gene_to_{domain}.csv.gz
