@@ -9,7 +9,7 @@ HUMAN_TAX_ID = 9606
 
 INPUT_FILE = {
     "GENE2GO": "data/input/gene2go.gz",
-    "GENE_INFO": "data/input/gene_info.gz",
+    "GENE_INFO": "data/input/Homo_sapiens.gene_info.gz",
     "GO_OBO": "data/input/go-basic.obo"
 }
 
