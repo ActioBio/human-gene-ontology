@@ -8,31 +8,42 @@ import gzip
 HUMAN_TAX_ID = 9606
 
 INPUT_FILE = {
+    "GENE_INFO": "data/input/protein_coding_gene.csv",
     "GENE2GO": "data/input/gene2go.gz",
-    "GENE_INFO": "data/input/Homo_sapiens.gene_info.gz",
     "GO_OBO": "data/input/go-basic.obo"
 }
 
 INPUT_COLUMN = {
-    "GENE_INFO": ['tax_id', 'GeneID', 'Symbol'],
     "GENE2GO": ['tax_id', 'GeneID', 'GO_ID', 'Evidence', 'Qualifier']
 }
 
 INPUT_DTYPE = {
-    'tax_id': 'Int64', 'GeneID': 'Int64', 'Symbol': str, 'Qualifier': str
+    'tax_id': 'Int64', 'GeneID': 'Int64', 'Qualifier': str
 }
 
-OUTPUT_DIR = "data/output"
+OUTPUT_DIR = "data/output/csv"
 
 REMOVE_SUBSETS = {'goantislim_grouping', 'gocheck_do_not_annotate', 'gocheck_do_not_manually_annotate'}
 EXPERIMENTAL_CODES = {'EXP', 'IDA', 'IPI', 'IMP', 'IGI', 'IEP'}
 PROPAGATE_ALONG = {'is_a', 'part_of'}
 GO_DOMAINS = {'biological_process', 'molecular_function', 'cellular_component'}
 
+def load_gene_data_from_csv(file_path):
+    gene_ids_set = set()
+
+    with open(file_path, 'r') as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            gene_ids_set.add(row['GeneID'])
+
+    return gene_ids_set
+
 def join_list_with_pipe(lst):
     return '|'.join(map(str, lst))
 
 def load_filtered_dataframe_iteratively(file_key):
+    gene_ids_set = load_gene_data_from_csv(INPUT_FILE["GENE_INFO"])
+
     path = INPUT_FILE[file_key]
     selected_data = []
 
@@ -42,12 +53,15 @@ def load_filtered_dataframe_iteratively(file_key):
             header_line = f.readline().strip()
         adjusted_header = header_line.replace('#', '').split('\t')
         col_indices = [adjusted_header.index(col) for col in INPUT_COLUMN[file_key]]
-        tax_id_index = adjusted_header.index('tax_id') 
+        tax_id_index = adjusted_header.index('tax_id')
+        gene_id_index = adjusted_header.index('GeneID')
 
         for line in f:
             split_line = line.strip().split('\t')
             if split_line[tax_id_index] == str(HUMAN_TAX_ID):
-                selected_data.append([split_line[i] for i in col_indices])
+                gene_id = split_line[gene_id_index]
+                if gene_id in gene_ids_set:
+                    selected_data.append([split_line[i] for i in col_indices])
 
     return pd.DataFrame(selected_data, columns=INPUT_COLUMN[file_key])
 
@@ -116,40 +130,36 @@ def create_annotations_df(graph_annot, annotation_key, exclude_keys=None):
 def merge_gene_info(annotations_df, gene_df):
     return annotations_df.merge(gene_df, on='GeneID')
 
-def aggregate_gene_ids_and_symbols(annotations_df):
+def aggregate_gene_ids(annotations_df):
     return annotations_df.groupby('go_id').agg({
-        'GeneID': lambda x: join_list_with_pipe(sorted(set(x))),
-        'Symbol': lambda x: join_list_with_pipe(sorted(set(x)))
+        'GeneID': lambda x: join_list_with_pipe(sorted(set(x)))
     }).reset_index()
 
-def extract_annotation_df(graph_annot, gene_df, go_df):
+def extract_annotation_df(graph_annot, go_df):
     direct_df = create_annotations_df(graph_annot, 'direct_annotations')
     inferred_df = create_annotations_df(graph_annot, 'inferred_annotations', ['direct_annotations'])
 
-    direct_df = merge_gene_info(direct_df, gene_df)
-    inferred_df = merge_gene_info(inferred_df, gene_df)
-
-    direct_agg = aggregate_gene_ids_and_symbols(direct_df)
-    inferred_agg = aggregate_gene_ids_and_symbols(inferred_df)
+    direct_agg = aggregate_gene_ids(direct_df)
+    inferred_agg = aggregate_gene_ids(inferred_df)
 
     final_df = direct_agg.merge(inferred_agg, on='go_id', how='outer', suffixes=('_direct', '_inferred'))
     final_df = go_df.merge(final_df, on='go_id', how='right')
-    final_df = final_df[['go_id', 'go_name', 'go_domain', 'GeneID_direct', 'GeneID_inferred', 'Symbol_direct', 'Symbol_inferred']]
+    final_df = final_df[['go_id', 'go_name', 'go_domain', 'GeneID_direct', 'GeneID_inferred']]
 
     return final_df
 
 def create_node_csv_files(annotation_df):
     for domain in GO_DOMAINS:
         domain_df = annotation_df[annotation_df['go_domain'] == domain][['go_id', 'go_name']]
-        node_file_name = f'node_{domain}.csv.gz'
+        node_file_name = f'node_{domain}.csv'
         path = os.path.join(OUTPUT_DIR, node_file_name)
-        domain_df.to_csv(path, index=False, compression='gzip') 
+        domain_df.to_csv(path, index=False) 
 
 def create_edge_csv_files(annotation_df, gene2go_df):
     gene2go_evidence_df = gene2go_df[gene2go_df['Evidence'].isin(EXPERIMENTAL_CODES)]
     gene_go_identifier_set = set(gene2go_evidence_df.apply(lambda row: f"{row['GeneID']}_{row['GO_ID']}", axis=1))
 
-    files = {domain: gzip.open(os.path.join(OUTPUT_DIR, f'edge_gene_to_{domain}.csv.gz'), 'wt', newline='') for domain in GO_DOMAINS} 
+    files = {domain: open(os.path.join(OUTPUT_DIR, f'edge_gene_to_{domain}.csv'), 'w', newline='') for domain in GO_DOMAINS} 
     writers = {domain: csv.writer(file) for domain, file in files.items()}
 
     for writer in writers.values():
@@ -177,12 +187,11 @@ def extract_gene_ids(gene_ids_str):
     return [int(gene_id) for gene_id in gene_ids_str.split('|')] if not pd.isna(gene_ids_str) and gene_ids_str else []
 
 def main():
-    gene_df = load_filtered_dataframe_iteratively("GENE_INFO")
     gene2go_df = load_filtered_dataframe_iteratively("GENE2GO")
     go_graph = read_go_to_graph()
     go_df = go_graph_to_dataframe(go_graph)
     graph_annot = annotate_and_propagate(go_graph, gene2go_df)
-    annotation_df = extract_annotation_df(graph_annot, gene_df, go_df)
+    annotation_df = extract_annotation_df(graph_annot, go_df)
     create_node_csv_files(annotation_df)
     create_edge_csv_files(annotation_df, gene2go_df)
 

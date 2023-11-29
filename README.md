@@ -18,12 +18,12 @@ python process.py
 
 ### Input
 
+- protein_coding_gene.csv
+  - The file is a CSV containing extracted data on protein-coding genes from the NCBI dataset.
 - go-basic.obo
   - The Gene Ontology file in OBO format. It contains ontological information in a structured form, describing gene products in terms of their associated biological processes, cellular components, and molecular functions in a species-independent manner.
 - gene2go.gz
   - The file from NCBI that links genes from the Entrez Gene database to Gene Ontology (GO) terms, establishing a connection between gene identifiers and their functional annotations.
-- Homo_sapiens.gene_info.gz
-  - The file from NCBI is a compressed archive containing detailed information on genes.
 
 ### Output
 
