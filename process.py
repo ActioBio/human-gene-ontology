@@ -150,20 +150,30 @@ def extract_annotation_df(graph_annot, go_df):
 
 def create_node_csv_files(annotation_df):
     for domain in GO_DOMAINS:
-        domain_df = annotation_df[annotation_df['go_domain'] == domain][['go_id', 'go_name']]
-        node_file_name = f'node_{domain}.csv'
+        domain_df = annotation_df[annotation_df['go_domain'] == domain].rename(
+            columns={'go_id': 'identifier', 'go_name': 'name'}
+        )[['identifier', 'name']]
+
+        formatted_domain = ''.join(word.capitalize() for word in domain.split('_'))
+        node_file_name = f'node_{formatted_domain}.csv'
         path = os.path.join(OUTPUT_DIR, node_file_name)
-        domain_df.to_csv(path, index=False) 
+        domain_df.to_csv(path, index=False)
 
 def create_edge_csv_files(annotation_df, gene2go_df):
     gene2go_evidence_df = gene2go_df[gene2go_df['Evidence'].isin(EXPERIMENTAL_CODES)]
     gene_go_identifier_set = set(gene2go_evidence_df.apply(lambda row: f"{row['GeneID']}_{row['GO_ID']}", axis=1))
 
-    files = {domain: open(os.path.join(OUTPUT_DIR, f'edge_gene_to_{domain}.csv'), 'w', newline='') for domain in GO_DOMAINS} 
+    files = {}
+    for domain in GO_DOMAINS:
+        formatted_domain = ''.join(word.capitalize() for word in domain.split('_'))
+        relationship_verb = 'enables' if domain == 'molecular_function' else 'locatedIn' if domain == 'cellular_component' else 'involvedIn'
+        file_path = os.path.join(OUTPUT_DIR, f'edge_Gene_{relationship_verb}_{formatted_domain}.csv')
+        files[domain] = open(file_path, 'w', newline='')
+
     writers = {domain: csv.writer(file) for domain, file in files.items()}
 
     for writer in writers.values():
-        writer.writerow(['gene_id', 'go_id', 'type', 'experimental'])
+        writer.writerow(['source_id', 'target_id', 'type', 'experimental'])
 
     for _, row in annotation_df.iterrows():
         go_id = row['go_id']
